@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using NAudio.CoreAudioApi;
 using NAudio.Wave;
 using System.Threading.Tasks;
+using NAudio.Wave.SampleProviders;
 
 namespace AudiSync
 {
@@ -17,6 +18,10 @@ namespace AudiSync
         private readonly List<(WasapiOut output, BufferedWaveProvider buffer)> _activeOutputs = new();
         private string? _originalDefaultDeviceId;
         private readonly Dictionary<MMDevice, Slider> _deviceSliders = new();
+        private readonly Dictionary<MMDevice, VolumeSampleProvider> _deviceVolumeProviders = new();
+        private readonly Dictionary<MMDevice, Slider> _volumeSliders = new();
+        private readonly Dictionary<MMDevice, BufferedWaveProvider> _deviceBuffers = new();
+        private bool _isSyncing = false;
 
         public MainWindow()
         {
@@ -42,11 +47,36 @@ namespace AudiSync
             return names;
         }
 
+        private void AdjustDeviceDelayLive(MMDevice device, int deltaMs)
+        {
+            if (deltaMs == 0 || _capture == null) return;
+            if (!_deviceBuffers.TryGetValue(device, out var buffer)) return;
+
+            int bytesPerMs = _capture.WaveFormat.AverageBytesPerSecond / 1000;
+            int byteCount = Math.Abs(deltaMs) * bytesPerMs;
+            byteCount -= byteCount % _capture.WaveFormat.BlockAlign; // keep sample-aligned
+            if (byteCount <= 0) return;
+
+            if (deltaMs > 0)
+            {
+                // Increasing delay: insert silence, pushing this device's audio later
+                var silence = new byte[byteCount];
+                buffer.AddSamples(silence, 0, byteCount);
+            }
+            else
+            {
+                // Decreasing delay: discard some queued audio to catch this device up
+                var throwaway = new byte[byteCount];
+                buffer.Read(throwaway, 0, byteCount);
+            }
+        }
+
         private void LoadDevices()
         {
             DeviceList.Items.Clear();
             _renderDevices.Clear();
             _deviceSliders.Clear();
+            _volumeSliders.Clear();
 
             var bluetoothNames = GetPairedBluetoothDeviceNames();
             var enumerator = new MMDeviceEnumerator();
@@ -75,56 +105,83 @@ namespace AudiSync
                     Minimum = 0,
                     Maximum = 300,
                     Width = 120,
-                    TickFrequency = 10,
+                    TickFrequency = 5,
                     IsSnapToTickEnabled = true,
                     VerticalAlignment = VerticalAlignment.Center,
                     Margin = new Thickness(5, 0, 5, 0)
                 };
 
-                var delayLabel = new TextBlock
+                var delayLabel = new TextBlock { Text = "0 ms", Width = 50, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center };
+
+                var minusButton = new Button { Content = "−", Width = 28, Height = 24, VerticalAlignment = VerticalAlignment.Center };
+                minusButton.Click += (s, e) => { if (slider.Value >= slider.TickFrequency) slider.Value -= slider.TickFrequency; };
+
+                var plusButton = new Button { Content = "+", Width = 28, Height = 24, VerticalAlignment = VerticalAlignment.Center };
+                plusButton.Click += (s, e) => { if (slider.Value <= slider.Maximum - slider.TickFrequency) slider.Value += slider.TickFrequency; };
+
+                double previousDelay = 0;
+                slider.ValueChanged += (s, e) =>
                 {
-                    Text = "0 ms",
-                    Width = 50,
+                    delayLabel.Text = $"{(int)slider.Value} ms";
+                    double delta = slider.Value - previousDelay;
+                    previousDelay = slider.Value;
+
+                    if (_isSyncing)
+                        AdjustDeviceDelayLive(device, (int)delta);
+                };
+
+                var delayRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(20, 2, 0, 2) };
+                delayRow.Children.Add(new TextBlock { Text = "Delay:", Width = 50, VerticalAlignment = VerticalAlignment.Center });
+                delayRow.Children.Add(minusButton);
+                delayRow.Children.Add(slider);
+                delayRow.Children.Add(plusButton);
+                delayRow.Children.Add(delayLabel);
+
+                // --- Volume controls ---
+                var volumeSlider = new Slider
+                {
+                    Minimum = 0,
+                    Maximum = 100,
+                    Value = 100,
+                    Width = 120,
+                    TickFrequency = 5,
+                    IsSnapToTickEnabled = true,
                     VerticalAlignment = VerticalAlignment.Center,
-                    TextAlignment = TextAlignment.Center
+                    Margin = new Thickness(5, 0, 5, 0)
                 };
 
-                var minusButton = new Button
+                var volumeLabel = new TextBlock { Text = "100 %", Width = 50, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center };
+
+                var volMinusButton = new Button { Content = "−", Width = 28, Height = 24, VerticalAlignment = VerticalAlignment.Center };
+                volMinusButton.Click += (s, e) => { if (volumeSlider.Value >= volumeSlider.TickFrequency) volumeSlider.Value -= volumeSlider.TickFrequency; };
+
+                var volPlusButton = new Button { Content = "+", Width = 28, Height = 24, VerticalAlignment = VerticalAlignment.Center };
+                volPlusButton.Click += (s, e) => { if (volumeSlider.Value <= volumeSlider.Maximum - volumeSlider.TickFrequency) volumeSlider.Value += volumeSlider.TickFrequency; };
+
+                volumeSlider.ValueChanged += (s, e) =>
                 {
-                    Content = "−",
-                    Width = 28,
-                    Height = 24,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                minusButton.Click += (s, e) =>
-                {
-                    if (slider.Value >= slider.TickFrequency)
-                        slider.Value -= slider.TickFrequency;
+                    volumeLabel.Text = $"{(int)volumeSlider.Value} %";
+                    // Live-update volume if this device is currently playing
+                    if (_deviceVolumeProviders.TryGetValue(device, out var vp))
+                        vp.Volume = (float)(volumeSlider.Value / 100.0);
                 };
 
-                var plusButton = new Button
-                {
-                    Content = "+",
-                    Width = 28,
-                    Height = 24,
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                plusButton.Click += (s, e) =>
-                {
-                    if (slider.Value <= slider.Maximum - slider.TickFrequency)
-                        slider.Value += slider.TickFrequency;
-                };
+                var volumeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(20, 2, 0, 8) };
+                volumeRow.Children.Add(new TextBlock { Text = "Volume:", Width = 50, VerticalAlignment = VerticalAlignment.Center });
+                volumeRow.Children.Add(volMinusButton);
+                volumeRow.Children.Add(volumeSlider);
+                volumeRow.Children.Add(volPlusButton);
+                volumeRow.Children.Add(volumeLabel);
 
-                slider.ValueChanged += (s, e) => delayLabel.Text = $"{(int)slider.Value} ms";
+                var deviceBlock = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(0, 5, 0, 5) };
+                deviceBlock.Children.Add(checkBox);
+                deviceBlock.Children.Add(delayRow);
+                deviceBlock.Children.Add(volumeRow);
+                deviceBlock.Children.Add(new Separator());
 
-                var row = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(0, 3, 0, 3) };
-                row.Children.Add(checkBox);
-                row.Children.Add(minusButton);
-                row.Children.Add(slider);
-                row.Children.Add(plusButton);
-                row.Children.Add(delayLabel);
-
-                DeviceList.Items.Add(row);
+                DeviceList.Items.Add(deviceBlock);
+                _deviceSliders[device] = slider;
+                _volumeSliders[device] = volumeSlider;
                 _deviceSliders[device] = slider;
             }
         }
@@ -141,11 +198,11 @@ namespace AudiSync
         private async void Start_Click(object sender, RoutedEventArgs e)
         {
             var selectedDevices = DeviceList.Items
-             .Cast<StackPanel>()
-             .Select(row => (CheckBox)row.Children[0])
-             .Where(cb => cb.IsChecked == true)
-             .Select(cb => (MMDevice)cb.Tag)
-             .ToList();
+            .Cast<StackPanel>()
+            .Select(block => (CheckBox)block.Children[0])
+            .Where(cb => cb.IsChecked == true)
+            .Select(cb => (MMDevice)cb.Tag)
+            .ToList();
 
             if (selectedDevices.Count == 0)
             {
@@ -189,8 +246,14 @@ namespace AudiSync
                         DiscardOnBufferOverflow = true,
                         BufferDuration = TimeSpan.FromSeconds(2)
                     };
+                    _deviceBuffers[device] = buffer;
                     var output = new WasapiOut(device, AudioClientShareMode.Shared, true, 100);
-                    output.Init(buffer);
+
+                    float initialVolume = (float)(_volumeSliders[device].Value / 100.0);
+                    var sampleProvider = buffer.ToSampleProvider();
+                    var volumeProvider = new VolumeSampleProvider(sampleProvider) { Volume = initialVolume };
+                    _deviceVolumeProviders[device] = volumeProvider;
+                    output.Init(volumeProvider.ToWaveProvider());
                     _activeOutputs.Add((output, buffer));
 
                     int delayMs = (int)_deviceSliders[device].Value;
@@ -215,6 +278,7 @@ namespace AudiSync
                 };
 
                 _capture.StartRecording();
+                _isSyncing = true;
 
                 StatusText.Text = $"Status: Syncing to {selectedDevices.Count} device(s)";
                 StartBtn.IsEnabled = false;
@@ -229,6 +293,7 @@ namespace AudiSync
 
         private void Stop_Click(object sender, RoutedEventArgs e)
         {
+            _isSyncing = false;
             _capture?.StopRecording();
             _capture?.Dispose();
             _capture = null;
@@ -239,6 +304,8 @@ namespace AudiSync
                 output.Dispose();
             }
             _activeOutputs.Clear();
+            _deviceBuffers.Clear();
+            _deviceVolumeProviders.Clear();
 
             StatusText.Text = "Status: Idle";
             StartBtn.IsEnabled = true;
