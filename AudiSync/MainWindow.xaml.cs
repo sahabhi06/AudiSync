@@ -1,16 +1,19 @@
-﻿using System;
+﻿using NAudio.CoreAudioApi;
+using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Management;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using NAudio.CoreAudioApi;
-using NAudio.Wave;
-using System.Threading.Tasks;
-using NAudio.Wave.SampleProviders;
+using System.Windows.Threading;
 
 namespace AudiSync
 {
+    
+
     public partial class MainWindow : Window
     {
         private readonly List<MMDevice> _renderDevices = new();
@@ -45,6 +48,38 @@ namespace AudiSync
             }
             catch { }
             return names;
+        }
+
+        private void HandleDeviceFailure(MMDevice device, WasapiOut output, Exception? ex)
+        {
+            // PlaybackStopped fires on a background thread — must marshal back to UI thread
+            Dispatcher.Invoke(() =>
+            {
+                // Remove this device from active playback so the DataAvailable loop stops touching it
+                _activeOutputs.RemoveAll(pair => pair.output == output);
+                _deviceBuffers.Remove(device);
+                _deviceVolumeProviders.Remove(device);
+
+                // Uncheck it in the UI so it's clear this device dropped out
+                foreach (StackPanel block in DeviceList.Items)
+                {
+                    var checkBox = (CheckBox)block.Children[0];
+                    if (checkBox.Tag is MMDevice d && d.ID == device.ID)
+                        checkBox.IsChecked = false;
+                }
+
+                string reason = ex != null ? ex.Message : "disconnected";
+                StatusText.Text = $"Status: '{device.FriendlyName}' dropped out ({reason}). Still syncing to {_activeOutputs.Count} device(s).";
+
+                try { output.Dispose(); } catch { }
+
+                // If every device has dropped, fully stop
+                if (_activeOutputs.Count == 0)
+                {
+                    Stop_Click(this, new RoutedEventArgs());
+                    StatusText.Text = "Status: All devices disconnected — sync stopped";
+                }
+            });
         }
 
         private void AdjustDeviceDelayLive(MMDevice device, int deltaMs)
@@ -173,7 +208,7 @@ namespace AudiSync
                 volumeRow.Children.Add(volPlusButton);
                 volumeRow.Children.Add(volumeLabel);
 
-                var deviceBlock = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(0, 5, 0, 5) };
+                var deviceBlock = new StackPanel { Orientation = Orientation.Vertical, Margin = new Thickness(0, 8, 0, 8) };
                 deviceBlock.Children.Add(checkBox);
                 deviceBlock.Children.Add(delayRow);
                 deviceBlock.Children.Add(volumeRow);
@@ -182,7 +217,6 @@ namespace AudiSync
                 DeviceList.Items.Add(deviceBlock);
                 _deviceSliders[device] = slider;
                 _volumeSliders[device] = volumeSlider;
-                _deviceSliders[device] = slider;
             }
         }
 
@@ -248,6 +282,12 @@ namespace AudiSync
                     };
                     _deviceBuffers[device] = buffer;
                     var output = new WasapiOut(device, AudioClientShareMode.Shared, true, 100);
+                    output.PlaybackStopped += (s, e) =>
+                    {
+                        // Only treat this as a failure if it stopped with an error (not a normal user-initiated Stop)
+                        if (e.Exception != null)
+                            HandleDeviceFailure(device, output, e.Exception);
+                    };
 
                     float initialVolume = (float)(_volumeSliders[device].Value / 100.0);
                     var sampleProvider = buffer.ToSampleProvider();
@@ -273,8 +313,18 @@ namespace AudiSync
 
                 _capture.DataAvailable += (s, a) =>
                 {
-                    foreach (var (_, buffer) in _activeOutputs)
-                        buffer.AddSamples(a.Buffer, 0, a.BytesRecorded);
+                    // Iterate a snapshot copy — _activeOutputs can be modified concurrently by HandleDeviceFailure
+                    foreach (var (output, buffer) in _activeOutputs.ToList())
+                    {
+                        try
+                        {
+                            buffer.AddSamples(a.Buffer, 0, a.BytesRecorded);
+                        }
+                        catch
+                        {
+                            // This device's buffer failed — let PlaybackStopped handle cleanup, just skip it here
+                        }
+                    }
                 };
 
                 _capture.StartRecording();
@@ -294,14 +344,14 @@ namespace AudiSync
         private void Stop_Click(object sender, RoutedEventArgs e)
         {
             _isSyncing = false;
-            _capture?.StopRecording();
-            _capture?.Dispose();
+            try { _capture?.StopRecording(); } catch { }
+            try { _capture?.Dispose(); } catch { }
             _capture = null;
 
             foreach (var (output, _) in _activeOutputs)
             {
-                output.Stop();
-                output.Dispose();
+                try { output.Stop(); } catch { }
+                try { output.Dispose(); } catch { }
             }
             _activeOutputs.Clear();
             _deviceBuffers.Clear();
