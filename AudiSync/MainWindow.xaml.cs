@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using NAudio.Wave.SampleProviders;
 
 namespace AudiSync
 {
@@ -25,6 +26,7 @@ namespace AudiSync
         private readonly Dictionary<MMDevice, Slider> _volumeSliders = new();
         private readonly Dictionary<MMDevice, BufferedWaveProvider> _deviceBuffers = new();
         private bool _isSyncing = false;
+        private bool _isCalibrating = false;
 
         public MainWindow()
         {
@@ -82,6 +84,181 @@ namespace AudiSync
             });
         }
 
+        private List<MMDevice> GetSelectedDevices()
+        {
+            return DeviceList.Items
+                .Cast<StackPanel>()
+                .Select(block => (CheckBox)block.Children[0])
+                .Where(cb => cb.IsChecked == true)
+                .Select(cb => (MMDevice)cb.Tag)
+                .ToList();
+        }
+
+        private async void Calibrate_Click(object sender, RoutedEventArgs e)
+        {
+            var selectedDevices = GetSelectedDevices();
+
+            if (selectedDevices.Count < 2)
+            {
+                StatusText.Text = "Status: Select at least 2 devices to calibrate";
+                return;
+            }
+
+            if (FindNonBluetoothMicrophone() == null)
+            {
+                StatusText.Text = "Status: ERROR - No built-in/non-Bluetooth microphone detected. Calibration needs one to avoid disrupting your Bluetooth audio.";
+                return;
+            }
+
+            _isCalibrating = true;
+            CalibrateBtn.IsEnabled = false;
+            StartBtn.IsEnabled = false;
+
+            // If we're actively syncing, remember and mute current volumes so the test tone can be heard cleanly
+            var savedVolumes = new Dictionary<MMDevice, float>();
+            bool wasSyncing = _isSyncing;
+
+            if (wasSyncing)
+            {
+                StatusText.Text = "Status: Muting playback briefly for calibration...";
+                foreach (var device in selectedDevices)
+                {
+                    if (_deviceVolumeProviders.TryGetValue(device, out var vp))
+                    {
+                        savedVolumes[device] = vp.Volume;
+                        vp.Volume = 0f;
+                    }
+                }
+                await Task.Delay(300); // let the mute settle before measuring
+            }
+
+            try
+            {
+                var measurements = new Dictionary<MMDevice, double>();
+
+                for (int i = 0; i < selectedDevices.Count; i++)
+                {
+                    var device = selectedDevices[i];
+                    StatusText.Text = $"Status: Calibrating '{device.FriendlyName}' ({i + 1}/{selectedDevices.Count}) — please stay quiet";
+                    double latency = await MeasureDeviceLatencyAsync(device);
+                    measurements[device] = latency;
+                    await Task.Delay(500);
+                }
+
+                double minLatency = measurements.Values.Min();
+
+                foreach (var device in selectedDevices)
+                {
+                    int delayMs = (int)Math.Round(measurements[device] - minLatency);
+                    delayMs -= delayMs % 5;
+                    _deviceSliders[device].Value = Math.Max(0, delayMs);
+                }
+
+                StatusText.Text = wasSyncing
+                    ? "Status: Calibration complete — resuming playback with corrected sync"
+                    : "Status: Calibration complete — review delays below, then Start Sync";
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = "Status: ERROR during calibration - " + ex.Message;
+            }
+            finally
+            {
+                // Restore original volumes if we muted for a live calibration
+                foreach (var kvp in savedVolumes)
+                {
+                    if (_deviceVolumeProviders.TryGetValue(kvp.Key, out var vp))
+                        vp.Volume = kvp.Value;
+                }
+
+                _isCalibrating = false;
+                CalibrateBtn.IsEnabled = true;
+                StartBtn.IsEnabled = !wasSyncing; // keep Start disabled if we're still actively syncing
+            }
+        }
+
+        private MMDevice? FindNonBluetoothMicrophone()
+        {
+            var bluetoothNames = GetPairedBluetoothDeviceNames();
+            var enumerator = new MMDeviceEnumerator();
+            var micDevices = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active);
+
+            // Prefer a mic that is NOT associated with any paired Bluetooth device
+            return micDevices.FirstOrDefault(mic =>
+                !bluetoothNames.Any(bt => mic.FriendlyName.Contains(bt)));
+        }
+
+        private async Task<double> MeasureDeviceLatencyAsync(MMDevice device)
+        {
+            var micDevice = FindNonBluetoothMicrophone();
+            if (micDevice == null)
+            {
+                StatusText.Text = "Status: ERROR - No non-Bluetooth microphone found for calibration";
+                return 0;
+            }
+
+            var samples = new List<float>();
+            var capture = new WasapiCapture(micDevice);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+
+            capture.DataAvailable += (s, a) =>
+            {
+                int bytesPerSample = capture.WaveFormat.BitsPerSample / 8;
+                int channels = capture.WaveFormat.Channels;
+                int sampleCount = a.BytesRecorded / bytesPerSample / channels;
+
+                for (int i = 0; i < sampleCount; i++)
+                {
+                    int offset = i * bytesPerSample * channels;
+                    float sample = capture.WaveFormat.Encoding == WaveFormatEncoding.IeeeFloat
+                        ? BitConverter.ToSingle(a.Buffer, offset)
+                        : BitConverter.ToInt16(a.Buffer, offset) / 32768f;
+                    samples.Add(Math.Abs(sample));
+                }
+            };
+
+            capture.StartRecording();
+            await Task.Delay(300); // capture a moment of baseline "silence" first
+
+            double baseline = samples.Count > 0 ? samples.Average() : 0.001;
+            double threshold = Math.Max(baseline * 4, 0.02);
+
+            double clickSentMs = sw.Elapsed.TotalMilliseconds;
+            int actualSampleRate = capture.WaveFormat.SampleRate;
+            var tone = new SignalGenerator(capture.WaveFormat.SampleRate, 1)
+            {
+                Type = SignalGeneratorType.Sin,
+                Frequency = 2500,
+                Gain = 0.8
+            };
+            var toneProvider = tone.Take(TimeSpan.FromMilliseconds(150));
+
+            var output = new WasapiOut(device, AudioClientShareMode.Shared, true, 100);
+            output.Init(toneProvider.ToWaveProvider());
+            output.Play();
+
+            await Task.Delay(1500); // window to let the tone play + travel + be captured
+
+            output.Stop();
+            output.Dispose();
+            capture.StopRecording();
+            capture.Dispose();
+
+            double msPerSample = 1000.0 / actualSampleRate;
+
+            int startIndex = (int)(clickSentMs / msPerSample);
+            for (int i = Math.Max(0, startIndex); i < samples.Count; i++)
+            {
+                if (samples[i] > threshold)
+                {
+                    double onsetMs = i * msPerSample;
+                    return onsetMs - clickSentMs;
+                }
+            }
+
+            // Fallback: no clear onset detected, assume 0 extra latency
+            return 0;
+        }
         private void AdjustDeviceDelayLive(MMDevice device, int deltaMs)
         {
             if (deltaMs == 0 || _capture == null) return;
@@ -231,6 +408,11 @@ namespace AudiSync
 
         private async void Start_Click(object sender, RoutedEventArgs e)
         {
+            if (_isCalibrating)
+            {
+                StatusText.Text = "Status: Please wait for calibration to finish first";
+                return;
+            }
             var selectedDevices = DeviceList.Items
             .Cast<StackPanel>()
             .Select(block => (CheckBox)block.Children[0])
@@ -269,7 +451,7 @@ namespace AudiSync
 
             try
             {
-                _capture = new WasapiCapture(cableOutput);
+                _capture = new WasapiCapture(cableOutput, true, 20); // event-driven, ~20ms latency instead of default
                 _capture.WaveFormat = cableOutput.AudioClient.MixFormat;
 
                 _activeOutputs.Clear();
@@ -281,7 +463,7 @@ namespace AudiSync
                         BufferDuration = TimeSpan.FromSeconds(2)
                     };
                     _deviceBuffers[device] = buffer;
-                    var output = new WasapiOut(device, AudioClientShareMode.Shared, true, 100);
+                    var output = new WasapiOut(device, AudioClientShareMode.Shared, true, 40);
                     output.PlaybackStopped += (s, e) =>
                     {
                         // Only treat this as a failure if it stopped with an error (not a normal user-initiated Stop)
@@ -329,7 +511,7 @@ namespace AudiSync
 
                 _capture.StartRecording();
                 _isSyncing = true;
-
+                
                 StatusText.Text = $"Status: Syncing to {selectedDevices.Count} device(s)";
                 StartBtn.IsEnabled = false;
                 StopBtn.IsEnabled = true;
