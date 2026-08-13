@@ -434,9 +434,6 @@ namespace AudiSync
             }
             var enumerator = new MMDeviceEnumerator();
 
-            // Remember current default device so we can restore it later
-            _originalDefaultDeviceId = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia).ID;
-
             // Find CABLE Input among NAudio's own device list (no second library needed)
             var cableInputDevice = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
                 .FirstOrDefault(d => d.FriendlyName.Contains("CABLE Input"));
@@ -446,6 +443,15 @@ namespace AudiSync
                 StatusText.Text = "Status: ERROR - Could not find 'CABLE Input' playback device";
                 return;
             }
+
+            // Remember current default device so we can restore it later —
+            // but only overwrite if it's not already CABLE Input (avoids saving a stale/incorrect "original")
+            var currentDefault = enumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+            if (currentDefault.ID != cableInputDevice.ID)
+            {
+                _originalDefaultDeviceId = currentDefault.ID;
+            }
+            // else: keep whatever _originalDefaultDeviceId already holds from a previous valid capture
 
             DefaultDeviceHelper.SetDefaultDevice(cableInputDevice.ID);
 
@@ -544,8 +550,22 @@ namespace AudiSync
             StopBtn.IsEnabled = false;
             RefreshBtn.IsEnabled = true;
             // Restore whatever the user's original speaker/headphone was
+            // Restore whatever the user's original speaker/headphone was
             if (_originalDefaultDeviceId != null)
+            {
                 DefaultDeviceHelper.SetDefaultDevice(_originalDefaultDeviceId);
+            }
+            else
+            {
+                // Safety fallback: we never captured a valid original device, so pick the first
+                // real (non-CABLE, non-currently-CABLE) playback device instead of leaving audio stuck
+                var enumerator = new MMDeviceEnumerator();
+                var fallback = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+                    .FirstOrDefault(d => !d.FriendlyName.Contains("CABLE"));
+
+                if (fallback != null)
+                    DefaultDeviceHelper.SetDefaultDevice(fallback.ID);
+            }
         }
     }
 }

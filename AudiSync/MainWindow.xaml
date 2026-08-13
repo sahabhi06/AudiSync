@@ -1,10 +1,9 @@
 ﻿<Window x:Class="AudiSync.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="AudiSync — Multi-Speaker Bluetooth Sync" Width="750"
-        SizeToContent="Height"
-        MinHeight="250"
-        MaxHeight="800"
+        Title="AudiSync — Multi-Speaker Bluetooth Sync" Width="750" Height="600"
+        MinHeight="300" MinWidth="600"
+        ResizeMode="CanResize"
         Background="#F5F6FA"
         FontFamily="Segoe UI">
     <Window.Resources>
@@ -20,34 +19,36 @@
             <Setter Property="FontWeight" Value="SemiBold"/>
         </Style>
     </Window.Resources>
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <Grid Margin="20">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
 
-    <Grid Margin="20">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+            <TextBlock Grid.Row="0" Text="🔊 AudiSync" FontSize="24" FontWeight="Bold" Foreground="#2B2D42" Margin="0,0,0,4"/>
 
-        <TextBlock Grid.Row="0" Text="🔊 AudiSync" FontSize="24" FontWeight="Bold" Foreground="#2B2D42" Margin="0,0,0,4"/>
+            <TextBlock Grid.Row="1" TextWrapping="Wrap" Margin="0,0,0,15" Foreground="#6C6F80" FontSize="12">
+                Check the devices you want to sync. If audio sounds out of sync between devices, use the − / + buttons to delay the earlier-sounding device until they line up. Play a metronome or clapping sound for the clearest test.
+            </TextBlock>
 
-        <TextBlock Grid.Row="1" TextWrapping="Wrap" Margin="0,0,0,15" Foreground="#6C6F80" FontSize="12">
-            Check the devices you want to sync. If audio sounds out of sync between devices, use the − / + buttons to delay the earlier-sounding device until they line up. Play a metronome or clapping sound for the clearest test.
-        </TextBlock>
+            <Border Grid.Row="2" Background="White" CornerRadius="8" BorderBrush="#E0E1E8" BorderThickness="1">
+                <ListBox x:Name="DeviceList" BorderThickness="0" Background="Transparent"
+                VerticalAlignment="Top" ScrollViewer.VerticalScrollBarVisibility="Disabled" Padding="10"/>
+            </Border>
 
-        <Border Grid.Row="2" Background="White" CornerRadius="8" BorderBrush="#E0E1E8" BorderThickness="1">
-            <ListBox x:Name="DeviceList" MaxHeight="450" BorderThickness="0" Background="Transparent"
-                     VerticalAlignment="Top" ScrollViewer.VerticalScrollBarVisibility="Auto" Padding="10"/>
-        </Border>
+            <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,15,0,0">
+                <Button x:Name="RefreshBtn" Content="Refresh" Width="100" Height="34" Click="Refresh_Click" Background="#8A8D9F"/>
+                <Button x:Name="StartBtn" Content="▶ Start Sync" Width="120" Height="34" Margin="10,0,0,0" Click="Start_Click"/>
+                <Button x:Name="StopBtn" Content="■ Stop" Width="100" Height="34" Margin="10,0,0,0" Click="Stop_Click" IsEnabled="False" Background="#FFEE6868"/>
+                <Button x:Name="CalibrateBtn" Content="🎯 Auto-Calibrate" Width="140" Height="34" Margin="10,0,0,0" Click="Calibrate_Click" Background="#3CB371"/>
+            </StackPanel>
 
-        <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,15,0,0">
-            <Button x:Name="RefreshBtn" Content="Refresh" Width="100" Height="34" Click="Refresh_Click" Background="#8A8D9F"/>
-            <Button x:Name="StartBtn" Content="▶ Start Sync" Width="120" Height="34" Margin="10,0,0,0" Click="Start_Click"/>
-            <Button x:Name="StopBtn" Content="■ Stop" Width="100" Height="34" Margin="10,0,0,0" Click="Stop_Click" IsEnabled="False" Background="#FFEE6868"/>
-            <Button x:Name="CalibrateBtn" Content="🎯 Auto-Calibrate" Width="140" Height="34" Margin="10,0,0,0" Click="Calibrate_Click" Background="#3CB371"/>
-        </StackPanel>
+            <TextBlock x:Name="StatusText" Grid.Row="4" Text="Status: Idle" Margin="0,12,0,0" FontStyle="Italic" Foreground="#6C6F80"/>
+         </Grid>
+   </ScrollViewer>
 
-        <TextBlock x:Name="StatusText" Grid.Row="4" Text="Status: Idle" Margin="0,12,0,0" FontStyle="Italic" Foreground="#6C6F80"/>
-    </Grid>
 </Window>
