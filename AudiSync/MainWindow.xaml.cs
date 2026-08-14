@@ -27,10 +27,12 @@ namespace AudiSync
         private readonly Dictionary<MMDevice, BufferedWaveProvider> _deviceBuffers = new();
         private bool _isSyncing = false;
         private bool _isCalibrating = false;
+        private Dictionary<string, DeviceSetting> _savedSettings = new();
 
         public MainWindow()
         {
             InitializeComponent();
+            _savedSettings = SettingsManager.Load();
             LoadDevices();
         }
 
@@ -282,6 +284,22 @@ namespace AudiSync
                 buffer.Read(throwaway, 0, byteCount);
             }
         }
+        private void SaveCurrentDeviceSettings()
+        {
+            foreach (var device in _renderDevices)
+            {
+                if (_deviceSliders.TryGetValue(device, out var delaySlider) &&
+                    _volumeSliders.TryGetValue(device, out var volumeSlider))
+                {
+                    _savedSettings[device.FriendlyName] = new DeviceSetting
+                    {
+                        DelayMs = (int)delaySlider.Value,
+                        VolumePercent = (int)volumeSlider.Value
+                    };
+                }
+            }
+            SettingsManager.Save(_savedSettings);
+        }
 
         private void LoadDevices()
         {
@@ -311,7 +329,8 @@ namespace AudiSync
                     Width = 400,
                     VerticalAlignment = VerticalAlignment.Center
                 };
-
+                // Check if we have saved settings for this exact device name
+                _savedSettings.TryGetValue(device.FriendlyName, out var savedSetting);
                 var slider = new Slider
                 {
                     Minimum = 0,
@@ -323,7 +342,11 @@ namespace AudiSync
                     Margin = new Thickness(5, 0, 5, 0)
                 };
 
-                var delayLabel = new TextBlock { Text = "0 ms", Width = 50, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center };
+                if (savedSetting != null)
+                {
+                    slider.Value = savedSetting.DelayMs;
+                }
+                var delayLabel = new TextBlock { Text = $"{(int)slider.Value} ms", Width = 50, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center };
 
                 var minusButton = new Button { Content = "−", Width = 28, Height = 24, VerticalAlignment = VerticalAlignment.Center };
                 minusButton.Click += (s, e) => { if (slider.Value >= slider.TickFrequency) slider.Value -= slider.TickFrequency; };
@@ -331,7 +354,7 @@ namespace AudiSync
                 var plusButton = new Button { Content = "+", Width = 28, Height = 24, VerticalAlignment = VerticalAlignment.Center };
                 plusButton.Click += (s, e) => { if (slider.Value <= slider.Maximum - slider.TickFrequency) slider.Value += slider.TickFrequency; };
 
-                double previousDelay = 0;
+                double previousDelay = savedSetting?.DelayMs ?? 0;
                 slider.ValueChanged += (s, e) =>
                 {
                     delayLabel.Text = $"{(int)slider.Value} ms";
@@ -340,6 +363,7 @@ namespace AudiSync
 
                     if (_isSyncing)
                         AdjustDeviceDelayLive(device, (int)delta);
+                    SaveCurrentDeviceSettings();
                 };
 
                 var delayRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(20, 2, 0, 2) };
@@ -362,7 +386,11 @@ namespace AudiSync
                     Margin = new Thickness(5, 0, 5, 0)
                 };
 
-                var volumeLabel = new TextBlock { Text = "100 %", Width = 50, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center };
+                if (savedSetting != null)
+                {
+                    volumeSlider.Value = savedSetting.VolumePercent;
+                }
+                var volumeLabel = new TextBlock { Text = $"{(int)volumeSlider.Value} %", Width = 50, VerticalAlignment = VerticalAlignment.Center, TextAlignment = TextAlignment.Center };
 
                 var volMinusButton = new Button { Content = "−", Width = 28, Height = 24, VerticalAlignment = VerticalAlignment.Center };
                 volMinusButton.Click += (s, e) => { if (volumeSlider.Value >= volumeSlider.TickFrequency) volumeSlider.Value -= volumeSlider.TickFrequency; };
@@ -376,6 +404,8 @@ namespace AudiSync
                     // Live-update volume if this device is currently playing
                     if (_deviceVolumeProviders.TryGetValue(device, out var vp))
                         vp.Volume = (float)(volumeSlider.Value / 100.0);
+
+                    SaveCurrentDeviceSettings();
                 };
 
                 var volumeRow = new StackPanel { Orientation = Orientation.Horizontal, Margin = new Thickness(20, 2, 0, 8) };
