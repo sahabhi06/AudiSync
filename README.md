@@ -1,4 +1,4 @@
-# AudiSync
+
 # AudiSync
 
 A Windows desktop app that plays the same audio simultaneously across multiple Bluetooth speakers, headphones, and earbuds connected to one PC — with per-device delay and volume control, including automatic mic-based calibration, to keep everything in sync.
