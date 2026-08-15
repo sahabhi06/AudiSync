@@ -27,6 +27,7 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
             <TextBlock Grid.Row="0" Text="🔊 AudiSync" FontSize="24" FontWeight="Bold" Foreground="#2B2D42" Margin="0,0,0,4"/>
@@ -34,20 +35,30 @@
             <TextBlock Grid.Row="1" TextWrapping="Wrap" Margin="0,0,0,15" Foreground="#6C6F80" FontSize="12">
                 Check the devices you want to sync. If audio sounds out of sync between devices, use the − / + buttons to delay the earlier-sounding device until they line up. Play a metronome or clapping sound for the clearest test.
             </TextBlock>
-
-            <Border Grid.Row="2" Background="White" CornerRadius="8" BorderBrush="#E0E1E8" BorderThickness="1">
+            <Border x:Name="VbCableWarning" Grid.Row="2" Background="#FFF3CD" BorderBrush="#FFECB5" BorderThickness="1" CornerRadius="6" Padding="12" Margin="0,0,0,10" Visibility="Collapsed">
+                <StackPanel>
+                    <TextBlock TextWrapping="Wrap" FontWeight="SemiBold" Foreground="#664D03">
+            ⚠ VB-CABLE not detected
+                    </TextBlock>
+                    <TextBlock TextWrapping="Wrap" Foreground="#664D03" Margin="0,4,0,8" FontSize="12">
+            AudiSync needs this free virtual audio driver to capture and route your system audio. Download and install it, then restart AudiSync.
+                    </TextBlock>
+                    <Button x:Name="VbCableLinkBtn" Content="Open VB-CABLE Download Page" Width="220" Height="28" HorizontalAlignment="Left" Click="VbCableLink_Click"/>
+                </StackPanel>
+            </Border>
+            <Border Grid.Row="3" Background="White" CornerRadius="8" BorderBrush="#E0E1E8" BorderThickness="1">
                 <ListBox x:Name="DeviceList" BorderThickness="0" Background="Transparent"
                 VerticalAlignment="Top" ScrollViewer.VerticalScrollBarVisibility="Disabled" Padding="10"/>
             </Border>
 
-            <StackPanel Grid.Row="3" Orientation="Horizontal" Margin="0,15,0,0">
+            <StackPanel Grid.Row="4" Orientation="Horizontal" Margin="0,15,0,0">
                 <Button x:Name="RefreshBtn" Content="Refresh" Width="100" Height="34" Click="Refresh_Click" Background="#8A8D9F"/>
                 <Button x:Name="StartBtn" Content="▶ Start Sync" Width="120" Height="34" Margin="10,0,0,0" Click="Start_Click"/>
                 <Button x:Name="StopBtn" Content="■ Stop" Width="100" Height="34" Margin="10,0,0,0" Click="Stop_Click" IsEnabled="False" Background="#FFEE6868"/>
                 <Button x:Name="CalibrateBtn" Content="🎯 Auto-Calibrate" Width="140" Height="34" Margin="10,0,0,0" Click="Calibrate_Click" Background="#3CB371"/>
             </StackPanel>
 
-            <TextBlock x:Name="StatusText" Grid.Row="4" Text="Status: Idle" Margin="0,12,0,0" FontStyle="Italic" Foreground="#6C6F80"/>
+            <TextBlock x:Name="StatusText" Grid.Row="5" Text="Status: Idle" Margin="0,12,0,0" FontStyle="Italic" Foreground="#6C6F80"/>
          </Grid>
    </ScrollViewer>
 

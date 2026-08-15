@@ -34,6 +34,13 @@ namespace AudiSync
             InitializeComponent();
             _savedSettings = SettingsManager.Load();
             LoadDevices();
+            if (!CheckVbCableInstalled())
+            {
+                VbCableWarning.Visibility = Visibility.Visible;
+                StatusText.Text = "Status: Install VB-CABLE to continue (see notice above)";
+                StartBtn.IsEnabled = false;
+                CalibrateBtn.IsEnabled = false;
+            }
         }
 
         private List<string> GetPairedBluetoothDeviceNames()
@@ -54,6 +61,24 @@ namespace AudiSync
             return names;
         }
 
+        private bool CheckVbCableInstalled()
+        {
+            var enumerator = new MMDeviceEnumerator();
+            bool hasCableOutput = enumerator.EnumerateAudioEndPoints(DataFlow.Capture, DeviceState.Active)
+                .Any(d => d.FriendlyName.Contains("CABLE Output"));
+            bool hasCableInput = enumerator.EnumerateAudioEndPoints(DataFlow.Render, DeviceState.Active)
+                .Any(d => d.FriendlyName.Contains("CABLE Input"));
+
+            return hasCableOutput && hasCableInput;
+        }
+        private void VbCableLink_Click(object sender, RoutedEventArgs e)
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
+            {
+                FileName = "https://vb-audio.com/Cable/",
+                UseShellExecute = true
+            });
+        }
         private void HandleDeviceFailure(MMDevice device, WasapiOut output, Exception? ex)
         {
             // PlaybackStopped fires on a background thread — must marshal back to UI thread
@@ -427,8 +452,18 @@ namespace AudiSync
             }
         }
 
-        private void Refresh_Click(object sender, RoutedEventArgs e) => LoadDevices();
+        private void Refresh_Click(object sender, RoutedEventArgs e)
+        {
+            LoadDevices();
 
+            bool vbCableOk = CheckVbCableInstalled();
+            VbCableWarning.Visibility = vbCableOk ? Visibility.Collapsed : Visibility.Visible;
+            StartBtn.IsEnabled = vbCableOk;
+            CalibrateBtn.IsEnabled = vbCableOk;
+
+            if (vbCableOk)
+                StatusText.Text = "Status: Idle";
+        }
         private MMDevice? FindCableOutputRecordingDevice()
         {
             var enumerator = new MMDeviceEnumerator();
